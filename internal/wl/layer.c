@@ -235,11 +235,7 @@ static void create_surface_internal(void) {
   zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, -1);
   zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface, 0);
   zwlr_layer_surface_v1_set_size(layer_surface, surf_w, surf_h);
-  zwlr_layer_surface_v1_set_anchor(layer_surface,
-    ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-    ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-    ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-    ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+  zwlr_layer_surface_v1_set_anchor(layer_surface, 0);
 
   wl_surface_commit(surface);
 }
