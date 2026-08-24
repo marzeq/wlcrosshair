@@ -1,0 +1,79 @@
+.TH WLCROSSHAIR 1 "2026-08-24" "wlcrosshair 1.2" "User Commands"
+.SH NAME
+wlcrosshair \- crosshair overlay for Wayland compositors
+.SH SYNOPSIS
+.B wlcrosshair
+.SH DESCRIPTION
+.B wlcrosshair
+is a minimal crosshair overlay for Wayland compositors that support the
+wlr-layer-shell protocol (e.g.\& Hyprland, Sway, COSMIC, KDE Plasma).
+.PP
+It runs as a background daemon, drawing a crosshair image on a layer-shell
+surface at the overlay layer, above all other windows including fullscreen
+applications and games.  It listens on a Unix socket for commands from
+.BR wlcrosshairctl (1).
+.PP
+The crosshair starts hidden.  Use
+.B wlcrosshairctl
+to toggle, show, hide, or reload the overlay.
+.SH CONFIGURATION
+Configuration is read from
+.I ~/.config/wlcrosshair/config.toml
+(respects
+.BR XDG_CONFIG_HOME ).
+.SS Config Fields
+.TP
+.BI path " = " PATH
+.I (required)
+Path to a PNG crosshair image.  Tilde expansion is supported.
+.TP
+.BI output " = " NAME
+.I (required)
+Wayland output name as reported by the compositor (e.g.\&
+.BR DP-1 ,
+.BR eDP-1 ,
+.BR HDMI-A-1 ).
+Use
+.B hyprctl monitors
+to find yours.
+.TP
+.BI size " = " PIXELS
+.I (required if width/height not set)
+Set both width and height to this value.
+.TP
+.BI width " = " PIXELS
+.I (required if size not set)
+Width of the crosshair in pixels.
+.TP
+.BI height " = " PIXELS
+.I (required if size not set)
+Height of the crosshair in pixels.
+.SS Example Config
+.PP
+.RS 4
+.nf
+path = "~/.config/wlcrosshair/crosshair.png"
+output = "DP-1"
+size = 24
+.fi
+.RE
+.SH SOCKET
+.B wlcrosshair
+listens on
+.I /tmp/crosshair.sock
+for IPC commands (one per line).
+.SH ENVIRONMENT
+.TP
+.B XDG_CONFIG_HOME
+Override the config directory.  Defaults to
+.IR ~/.config .
+.SH FILES
+.TP
+.I ~/.config/wlcrosshair/config.toml
+Default configuration file.
+.SH SEE ALSO
+.BR wlcrosshairctl (1)
+.SH AUTHOR
+marzeq
+.SH LICENSE
+MIT

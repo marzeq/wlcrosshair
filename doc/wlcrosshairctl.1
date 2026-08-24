@@ -1,0 +1,46 @@
+.TH WLCROSSHAIRCTL 1 "2026-08-24" "wlcrosshair 1.2" "User Commands"
+.SH NAME
+wlcrosshairctl \- control the wlcrosshair overlay
+.SH SYNOPSIS
+.B wlcrosshairctl
+.I command
+.SH DESCRIPTION
+.B wlcrosshairctl
+sends commands to a running
+.BR wlcrosshair (1)
+daemon over a Unix socket.
+.SH COMMANDS
+.TP
+.B toggle
+Toggle the crosshair visibility.  If hidden, show it; if visible, hide it.
+.TP
+.B show
+Force the crosshair visible.
+.TP
+.B hide
+Force the crosshair hidden.
+.TP
+.B reload
+Reload the configuration file and re-render the crosshair without restarting
+the daemon.
+.TP
+.B quit
+Shut down the
+.B wlcrosshair
+daemon and remove the overlay.
+.SH EXIT STATUS
+.TP
+.B 0
+Command sent successfully.
+.TP
+.B 1
+No command given, invalid command, or failed to connect to the daemon
+(is
+.B wlcrosshair
+running?).
+.SH SEE ALSO
+.BR wlcrosshair (1)
+.SH AUTHOR
+marzeq
+.SH LICENSE
+MIT
