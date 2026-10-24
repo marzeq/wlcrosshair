@@ -23,12 +23,18 @@ Create a configuration file at `~/.config/wlcrosshair/config.toml` to customize 
 
 ```toml
 path = "~/.config/wlcrosshair/rotated.png" # REQUIRED: path to crosshair image
+
 output = "DP-2" # REQUIRED: output name as named by your compositor
+
 size = 24 # REQUIRED: size of the crosshair in pixels, will resize the image to size x size pixels
 # OR if the image is not square, use width and height instead:
 # width = 32 # width of the crosshair in pixels
 # height = 16 # height of the crosshair in pixels
+
+# opacity = 1.0 # OPTIONAL: 0.0 (invisible) to 1.0 (original image opacity); defaults to 1.0
 ```
+
+Opacity multiplies the image's existing alpha, so transparent pixels stay transparent. The bundled sample crosshairs have fully opaque visible pixels; use `opacity` to make them translucent.
 
 Run `wlcrosshair` in the background through a systemd user service or your compositor's autostart configuration.
 
@@ -65,14 +71,17 @@ or use one of these online crosshair generators:
 git clone git@github.com:marzeq/wlcrosshair.git
 cd wlcrosshair
 
-go build -o wlcrosshair ./cmd/wlcrosshair
-go build -o wlcrosshairctl ./cmd/wlcrosshairctl
+make
+# optional: sudo make install PREFIX=/usr/local
 ```
+
+`make` builds one executable, `wlcrosshair`, and creates `wlcrosshairctl` as a symlink. The executable selects daemon or CLI behavior from its name.
 
 Build dependencies:
 
-- Go 1.25+
-- Wayland development libraries
+- C23 compiler (GCC, using `-std=gnu23`)
+- GNU Make and pkg-config
+- Wayland client and libpng development libraries
 
 ### Install from releases:
 
