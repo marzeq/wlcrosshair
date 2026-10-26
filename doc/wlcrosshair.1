@@ -48,6 +48,12 @@ Width of the crosshair in pixels.
 .BI height " = " PIXELS
 .I (required if size not set)
 Height of the crosshair in pixels.
+.TP
+.BI opacity " = " VALUE
+.I (optional; defaults to 1.0)
+Opacity multiplier from 0.0 (invisible) to 1.0 (original image opacity).
+The value multiplies the PNG image's existing alpha, so transparent pixels
+remain transparent.
 .SS Example Config
 .PP
 .RS 4
@@ -55,6 +61,7 @@ Height of the crosshair in pixels.
 path = "~/.config/wlcrosshair/crosshair.png"
 output = "DP-1"
 size = 24
+opacity = 0.75
 .fi
 .RE
 .SH SOCKET
