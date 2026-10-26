@@ -13,7 +13,6 @@ bool valid_command(utils_str_view command) {
          utils_str_view_eq_cstr(command, "quit");
 }
 
-#include "vendor/tomlc17.c"
 #include "protocols/generated/wlr-layer-shell-unstable-v1-client-protocol.c"
 #include "protocols/generated/xdg-output-unstable-v1-client-protocol.c"
 #include "protocols/generated/xdg-shell-client-protocol.c"

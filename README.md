@@ -35,6 +35,7 @@ size = 24 # REQUIRED: size of the crosshair in pixels, will resize the image to 
 ```
 
 Opacity multiplies the image's existing alpha, so transparent pixels stay transparent. The bundled sample crosshairs have fully opaque visible pixels; use `opacity` to make them translucent.
+Scaling averages covered source pixels, smoothing non-integer sizes while keeping exact integer enlargement crisp.
 
 Run `wlcrosshair` in the background through a systemd user service or your compositor's autostart configuration.
 

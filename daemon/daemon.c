@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <linux/memfd.h>
@@ -22,7 +23,6 @@
 #include "../vendor/utils.h"
 #include "../protocols/generated/wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "../protocols/generated/xdg-output-unstable-v1-client-protocol.h"
-#include "../vendor/tomlc17.h"
 
 extern const char* socket_path;
 bool valid_command(utils_str_view command);
@@ -35,78 +35,256 @@ typedef struct {
   double opacity;
 } Config;
 
+typedef enum { CONFIG_STRING,
+               CONFIG_INT,
+               CONFIG_FLOAT } ConfigValueType;
+
+typedef struct {
+  ConfigValueType type;
+  char* string;
+  int64_t integer;
+  double floating;
+} ConfigValue;
+
+bool config_comment_only(utils_str_view text) {
+  text = utils_str_view_trim_left(text);
+  return !text.count || text.data[0] == '#';
+}
+
+bool config_digits(utils_str_view text, size_t* position, char* normalized, size_t* length) {
+  bool found = false;
+  while (*position < text.count) {
+    char ch = text.data[*position];
+    if (ch == '_') {
+      if (!found || *position + 1 == text.count || !isdigit((unsigned char)text.data[*position + 1]))
+        return false;
+      (*position)++;
+      continue;
+    }
+    if (!isdigit((unsigned char)ch))
+      break;
+    normalized[(*length)++] = ch;
+    found = true;
+    (*position)++;
+  }
+  return found;
+}
+
+bool config_number(utils_str_view text, ConfigValue* result, utils_allocator alloc) {
+  char* normalized = utils_a_alloc(alloc, text.count + 1);
+  if (!normalized)
+    return false;
+  size_t position = 0, length = 0;
+  if (text.data[position] == '+' || text.data[position] == '-')
+    normalized[length++] = text.data[position++];
+  size_t integer_start = length;
+  if (!config_digits(text, &position, normalized, &length))
+    return false;
+  if (length - integer_start > 1 && normalized[integer_start] == '0')
+    return false;
+  bool floating = false;
+  if (position < text.count && text.data[position] == '.') {
+    floating = true;
+    normalized[length++] = text.data[position++];
+    if (!config_digits(text, &position, normalized, &length))
+      return false;
+  }
+  if (position < text.count && (text.data[position] == 'e' || text.data[position] == 'E')) {
+    floating = true;
+    normalized[length++] = text.data[position++];
+    if (position < text.count && (text.data[position] == '+' || text.data[position] == '-'))
+      normalized[length++] = text.data[position++];
+    if (!config_digits(text, &position, normalized, &length))
+      return false;
+  }
+  if (position != text.count)
+    return false;
+  normalized[length] = '\0';
+  char* end;
+  errno = 0;
+  if (floating) {
+    result->type = CONFIG_FLOAT;
+    result->floating = strtod(normalized, &end);
+  } else {
+    result->type = CONFIG_INT;
+    result->integer = strtoll(normalized, &end, 10);
+  }
+  return !errno && end == normalized + length;
+}
+
+bool config_value(utils_str_view text, ConfigValue* result, utils_allocator alloc) {
+  text = utils_str_view_trim_left(text);
+  if (!text.count || text.data[0] == '#')
+    return false;
+  if (text.data[0] == '"' || text.data[0] == '\'') {
+    char quote = text.data[0];
+    char* string = utils_a_alloc(alloc, text.count);
+    if (!string)
+      return false;
+    size_t length = 0;
+    for (size_t i = 1; i < text.count; i++) {
+      char ch = text.data[i];
+      if (ch == quote) {
+        if (!config_comment_only(utils_str_view_substr(text, i + 1, text.count)))
+          return false;
+        string[length] = '\0';
+        result->type = CONFIG_STRING;
+        result->string = string;
+        return true;
+      }
+      if (quote == '"' && ch == '\\') {
+        if (++i == text.count)
+          return false;
+        switch (text.data[i]) {
+        case 'b':
+          ch = '\b';
+          break;
+        case 't':
+          ch = '\t';
+          break;
+        case 'n':
+          ch = '\n';
+          break;
+        case 'f':
+          ch = '\f';
+          break;
+        case 'r':
+          ch = '\r';
+          break;
+        case '"':
+          ch = '"';
+          break;
+        case '\\':
+          ch = '\\';
+          break;
+        default:
+          return false;
+        }
+      } else if ((unsigned char)ch < 0x20)
+        return false;
+      string[length++] = ch;
+    }
+    return false;
+  }
+  size_t length = 0;
+  while (length < text.count && !isspace((unsigned char)text.data[length]) && text.data[length] != '#')
+    length++;
+  if (!length || !config_comment_only(utils_str_view_substr(text, length, text.count)))
+    return false;
+  return config_number(utils_str_view_substr(text, 0, length), result, alloc);
+}
+
 bool load_config(const char* filename, Config* config, utils_arena* arena) {
-  toml_result_t result = toml_parse_file_ex(filename);
-  if (!result.ok) {
-    fprintf(stderr, "Failed to load config: %s\n", result.errmsg);
-    toml_free(result);
+  FILE* file = fopen(filename, "r");
+  if (!file) {
+    fprintf(stderr, "Failed to load config: %s\n", strerror(errno));
     return false;
   }
-
-  toml_datum_t path = toml_get(result.toptab, "path");
-  toml_datum_t output = toml_get(result.toptab, "output");
-  toml_datum_t size = toml_get(result.toptab, "size");
-  toml_datum_t width = toml_get(result.toptab, "width");
-  toml_datum_t height = toml_get(result.toptab, "height");
-  toml_datum_t opacity = toml_get(result.toptab, "opacity");
-  bool ok = true;
-  if (path.type != TOML_UNKNOWN && path.type != TOML_STRING)
-    ok = false;
-  if (output.type != TOML_UNKNOWN && output.type != TOML_STRING)
-    ok = false;
-  if (size.type != TOML_UNKNOWN && size.type != TOML_INT64)
-    ok = false;
-  if (width.type != TOML_UNKNOWN && width.type != TOML_INT64)
-    ok = false;
-  if (height.type != TOML_UNKNOWN && height.type != TOML_INT64)
-    ok = false;
-  if (opacity.type != TOML_UNKNOWN && opacity.type != TOML_FP64 && opacity.type != TOML_INT64)
-    ok = false;
-  if (!ok) {
-    fputs("Failed to load config: invalid config value type\n", stderr);
-    toml_free(result);
-    return false;
-  }
-  if (path.type != TOML_STRING || !*path.u.s) {
-    fputs("Failed to load config: 'path' is required\n", stderr);
-    toml_free(result);
-    return false;
-  }
-  if (output.type != TOML_STRING || !*output.u.s) {
-    fputs("Failed to load config: 'output' is required\n", stderr);
-    toml_free(result);
-    return false;
-  }
-
-  double selected_opacity = opacity.type == TOML_FP64 ? opacity.u.fp64 : opacity.type == TOML_INT64 ? (double)opacity.u.int64
-                                                                                                    : 1.0;
-  if (!isfinite(selected_opacity) || selected_opacity < 0.0 || selected_opacity > 1.0) {
-    fputs("Failed to load config: 'opacity' must be between 0.0 and 1.0\n", stderr);
-    toml_free(result);
-    return false;
-  }
-
-  int64_t selected_width = width.type == TOML_INT64 ? width.u.int64 : 0;
-  int64_t selected_height = height.type == TOML_INT64 ? height.u.int64 : 0;
-  if (size.type == TOML_INT64 && size.u.int64 > 0)
-    selected_width = selected_height = size.u.int64;
-  if (selected_width <= 0 || selected_height <= 0 || selected_width > INT_MAX || selected_height > INT_MAX) {
-    fputs("Failed to load config: either 'size' or both 'width' and 'height' are required\n", stderr);
-    toml_free(result);
-    return false;
-  }
-
   utils_allocator alloc = utils_make_allocator_from_arena(arena);
-  Config parsed = {
-      .path = utils_str_view_to_cstr(utils_str_view_from_cstr(path.u.s), alloc),
-      .output = utils_str_view_to_cstr(utils_str_view_from_cstr(output.u.s), alloc),
-      .width = (int)selected_width,
-      .height = (int)selected_height,
-      .opacity = selected_opacity,
-  };
-  toml_free(result);
-  if (!parsed.path || !parsed.output)
+  Config parsed = {.opacity = 1.0};
+  int64_t size = 0, width = 0, height = 0;
+  unsigned seen = 0;
+  char* line = NULL;
+  size_t capacity = 0, line_number = 0;
+  ssize_t length;
+  bool ok = true;
+  while ((length = getline(&line, &capacity, file)) >= 0) {
+    line_number++;
+    utils_str_view text = utils_str_view_trim(utils_str_view_make(line, (size_t)length));
+    if (config_comment_only(text))
+      continue;
+    int equal = utils_str_view_find(text, '=');
+    if (equal < 0) {
+      ok = false;
+      break;
+    }
+    utils_str_view key = utils_str_view_trim(utils_str_view_substr(text, 0, (size_t)equal));
+    for (size_t i = 0; i < key.count; i++) {
+      char ch = key.data[i];
+      if (!isalnum((unsigned char)ch) && ch != '_' && ch != '-')
+        ok = false;
+    }
+    if (!key.count || !ok)
+      break;
+    ConfigValue value;
+    if (!config_value(utils_str_view_substr(text, (size_t)equal + 1, text.count), &value, alloc)) {
+      ok = false;
+      break;
+    }
+    unsigned bit = 0;
+    if (utils_str_view_eq_cstr(key, "path")) {
+      bit = 1;
+      if (value.type == CONFIG_STRING)
+        parsed.path = value.string;
+      else
+        ok = false;
+    } else if (utils_str_view_eq_cstr(key, "output")) {
+      bit = 2;
+      if (value.type == CONFIG_STRING)
+        parsed.output = value.string;
+      else
+        ok = false;
+    } else if (utils_str_view_eq_cstr(key, "size")) {
+      bit = 4;
+      if (value.type == CONFIG_INT)
+        size = value.integer;
+      else
+        ok = false;
+    } else if (utils_str_view_eq_cstr(key, "width")) {
+      bit = 8;
+      if (value.type == CONFIG_INT)
+        width = value.integer;
+      else
+        ok = false;
+    } else if (utils_str_view_eq_cstr(key, "height")) {
+      bit = 16;
+      if (value.type == CONFIG_INT)
+        height = value.integer;
+      else
+        ok = false;
+    } else if (utils_str_view_eq_cstr(key, "opacity")) {
+      bit = 32;
+      if (value.type == CONFIG_FLOAT)
+        parsed.opacity = value.floating;
+      else if (value.type == CONFIG_INT)
+        parsed.opacity = (double)value.integer;
+      else
+        ok = false;
+    }
+    if (!ok || (seen & bit)) {
+      ok = false;
+      break;
+    }
+    seen |= bit;
+  }
+  if (ferror(file))
+    ok = false;
+  free(line);
+  fclose(file);
+  if (!ok) {
+    fprintf(stderr, "Failed to load config: invalid value at line %zu\n", line_number);
     return false;
+  }
+  if (!parsed.path || !*parsed.path) {
+    fputs("Failed to load config: 'path' is required\n", stderr);
+    return false;
+  }
+  if (!parsed.output || !*parsed.output) {
+    fputs("Failed to load config: 'output' is required\n", stderr);
+    return false;
+  }
+  if (!isfinite(parsed.opacity) || parsed.opacity < 0.0 || parsed.opacity > 1.0) {
+    fputs("Failed to load config: 'opacity' must be between 0.0 and 1.0\n", stderr);
+    return false;
+  }
+  if (size > 0)
+    width = height = size;
+  if (width <= 0 || height <= 0 || width > INT_MAX || height > INT_MAX) {
+    fputs("Failed to load config: either 'size' or both 'width' and 'height' are required\n", stderr);
+    return false;
+  }
+  parsed.width = (int)width;
+  parsed.height = (int)height;
   *config = parsed;
   return true;
 }
@@ -130,6 +308,8 @@ int surf_w, surf_h;
 
 int png_w, png_h;
 unsigned char* img_rgba;
+unsigned char* scaled_pixels;
+int scaled_w, scaled_h;
 
 int shm_fd = -1;
 void* shm_data = NULL;
@@ -183,6 +363,58 @@ void premultiply(uint8_t* data, int w, int h, double opacity) {
   }
 }
 
+void free_scaled_png(void) {
+  free(scaled_pixels);
+  scaled_pixels = NULL;
+  scaled_w = scaled_h = 0;
+}
+
+bool scale_png(void) {
+  if (!img_rgba || png_w <= 0 || png_h <= 0 || surf_w <= 0 || surf_h <= 0) {
+    free_scaled_png();
+    return false;
+  }
+  size_t count = (size_t)surf_w * (size_t)surf_h;
+  if (count > SIZE_MAX / 4) {
+    free_scaled_png();
+    return false;
+  }
+  unsigned char* pixels = malloc(count * 4);
+  if (!pixels) {
+    free_scaled_png();
+    return false;
+  }
+
+  for (int y = 0; y < surf_h; y++) {
+    double top = (double)y * png_h / surf_h;
+    double bottom = (double)(y + 1) * png_h / surf_h;
+    for (int x = 0; x < surf_w; x++) {
+      double left = (double)x * png_w / surf_w;
+      double right = (double)(x + 1) * png_w / surf_w;
+      double sum[4] = {0};
+      for (int sy = (int)top; sy < (int)ceil(bottom); sy++) {
+        double covered_y = fmin(bottom, sy + 1.0) - fmax(top, (double)sy);
+        for (int sx = (int)left; sx < (int)ceil(right); sx++) {
+          double weight = covered_y * (fmin(right, sx + 1.0) - fmax(left, (double)sx));
+          const unsigned char* source = img_rgba + ((size_t)sy * png_w + sx) * 4;
+          for (int channel = 0; channel < 4; channel++)
+            sum[channel] += source[channel] * weight;
+        }
+      }
+      unsigned char* target = pixels + ((size_t)y * surf_w + x) * 4;
+      double area = (right - left) * (bottom - top);
+      for (int channel = 0; channel < 4; channel++)
+        target[channel] = (unsigned char)(sum[channel] / area + 0.5);
+    }
+  }
+
+  free(scaled_pixels);
+  scaled_pixels = pixels;
+  scaled_w = surf_w;
+  scaled_h = surf_h;
+  return true;
+}
+
 bool load_png(const char* path, double opacity) {
   FILE* fp = fopen(path, "rb");
   if (!fp)
@@ -220,12 +452,14 @@ bool load_png(const char* path, double opacity) {
   fclose(fp);
 
   premultiply(img_rgba, png_w, png_h, opacity);
+  scale_png();
   return true;
 }
 
 void free_png(void) {
   free(img_rgba);
   img_rgba = NULL;
+  free_scaled_png();
 }
 
 struct output_ctx {
@@ -305,16 +539,7 @@ void clear_buffer(void) {
 }
 
 void blit_png(void) {
-  uint32_t* dst = shm_data;
-  uint32_t* src = (uint32_t*)img_rgba;
-
-  for (int y = 0; y < surf_h; y++) {
-    int sy = y * png_h / surf_h;
-    for (int x = 0; x < surf_w; x++) {
-      int sx = x * png_w / surf_w;
-      dst[y * surf_w + x] = src[sy * png_w + sx];
-    }
-  }
+  memcpy(shm_data, scaled_pixels, shm_size);
 }
 
 void layer_configure(void* data,
@@ -328,6 +553,8 @@ void layer_configure(void* data,
     surf_h = h;
     alloc_shm();
     create_buffer();
+    if (img_rgba)
+      scale_png();
   }
 
   configured = 1;
@@ -440,6 +667,7 @@ bool init_surface(int width, int height, const char* output_name) {
 }
 
 void destroy_surface(void) {
+  free_scaled_png();
   if (buffer)
     wl_buffer_destroy(buffer);
   buffer = NULL;
@@ -463,6 +691,8 @@ void destroy_surface(void) {
 
 void draw_png(void) {
   if (!img_rgba)
+    return;
+  if ((scaled_w != surf_w || scaled_h != surf_h || !scaled_pixels) && !scale_png())
     return;
 
   blit_png();
@@ -620,6 +850,7 @@ int run_daemon(void) {
         utils_a_reset(next_alloc);
         continue;
       }
+      free_png();
       destroy_surface();
       if (!init_surface(next_config.width, next_config.height, next_config.output)) {
         fputs("failed to initalise surface\n", stderr);
@@ -627,7 +858,6 @@ int run_daemon(void) {
         status = 1;
         break;
       }
-      free_png();
       load_png(expand_user(next_config.path, next_alloc), next_config.opacity);
       if (visible)
         draw_png();
