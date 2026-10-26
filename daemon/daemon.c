@@ -566,6 +566,9 @@ const struct zwlr_layer_surface_v1_listener layer_listener = {
 
 void create_surface_internal(void) {
   surface = wl_compositor_create_surface(compositor);
+  struct wl_region* input_region = wl_compositor_create_region(compositor);
+  wl_surface_set_input_region(surface, input_region);
+  wl_region_destroy(input_region);
 
   layer_surface = zwlr_layer_shell_v1_get_layer_surface(
       layer_shell,
