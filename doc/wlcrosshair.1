@@ -33,9 +33,9 @@ Wayland output name as reported by the compositor (e.g.\&
 .BR DP-1 ,
 .BR eDP-1 ,
 .BR HDMI-A-1 ).
-Use
-.B hyprctl monitors
-to find yours.
+See
+.B FINDING THE OUTPUT NAME
+below.
 .TP
 .BI size " = " PIXELS
 .I (required if width/height not set)
@@ -64,6 +64,54 @@ size = 24
 opacity = 0.75
 .fi
 .RE
+.SH FINDING THE OUTPUT NAME
+Run the command for your compositor inside its Wayland session and copy the
+name of the display where the crosshair should appear:
+.TP
+.B KDE Plasma: kscreen-doctor -o
+In "Output: 1 eDP-1 ...", use "eDP-1", not the numeric ID "1".
+.TP
+.B Hyprland: hyprctl monitors
+In "Monitor eDP-1 (ID 0):", use "eDP-1", not "0" or the description.
+.TP
+.B Sway: swaymsg -t get_outputs
+Use the output's "name" value, not its make or model.
+.TP
+.B COSMIC: cosmic-randr list
+Use the name at the start of an entry, e.g.\& "eDP-1 (enabled)".
+.TP
+.B Other wlroots-based compositors (river, Wayfire, labwc): wlr-randr
+Use the name before the quoted description, e.g.\& "DP-1".
+This requires wlr-output-management support.
+.TP
+.B niri: niri msg outputs
+Use the connector name in parentheses (e.g.\& "DP-1"), not the quoted
+monitor description.
+.PP
+For other Wayland compositors, consult their output listing command.
+.B wayland-info
+may show an output name if the compositor advertises
+.BR zxdg_output_manager_v1 ;
+do not use a numeric ID, monitor description or model instead.  The
+.B wlr-randr
+command is not generally available on KWin or COSMIC.  A compositor must
+provide a usable output name via
+.B zxdg_output_manager_v1
+and support
+.B zwlr_layer_shell_v1
+for this program to work; GNOME does not provide the required layer-shell
+protocol.
+.PP
+Set the discovered name in
+.IR ~/.config/wlcrosshair/config.toml ,
+for example:
+.PP
+.RS 4
+.nf
+output = "eDP-1"
+.fi
+.RE
+Check it again after changing ports or docks.
 .SH SOCKET
 .B wlcrosshair
 listens on

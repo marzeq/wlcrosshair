@@ -4,7 +4,7 @@ CPPFLAGS += $(shell pkg-config --cflags wayland-client libpng)
 LDLIBS += $(shell pkg-config --libs wayland-client libpng)
 PREFIX ?= /usr/local
 
-.PHONY: all clean install install-bin install-docs uninstall
+.PHONY: all clean dist install install-bin install-docs uninstall
 all: wlcrosshair wlcrosshairctl
 
 wlcrosshair: main.c daemon/daemon.c cli/cli.c vendor/utils.h $(wildcard protocols/generated/*-client-protocol.[ch])
@@ -12,6 +12,19 @@ wlcrosshair: main.c daemon/daemon.c cli/cli.c vendor/utils.h $(wildcard protocol
 
 wlcrosshairctl: wlcrosshair
 	ln -sf wlcrosshair $@
+
+dist:
+	@set -eu; \
+	  if [ -z "$${TAG:-}" ]; then echo 'TAG is required (e.g. TAG=1.3 make dist)' >&2; exit 1; fi; \
+	  $(MAKE) all; \
+	  package="wlcrosshair-$$TAG-amd64"; \
+	  stage=$$(mktemp -d); \
+	  trap 'rm -rf "$$stage"' EXIT; \
+	  mkdir -p "$$stage/$$package/bin"; \
+	  cp -P wlcrosshair wlcrosshairctl "$$stage/$$package/bin/"; \
+	  cp -R completions doc "$$stage/$$package/"; \
+	  tar -czf "$$stage/$$package.tar.gz" -C "$$stage" "$$package"; \
+	  mv "$$stage/$$package.tar.gz" .
 
 install: install-bin install-docs
 
