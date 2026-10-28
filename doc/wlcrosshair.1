@@ -6,7 +6,7 @@ wlcrosshair \- crosshair overlay for Wayland compositors
 .SH DESCRIPTION
 .B wlcrosshair
 is a minimal crosshair overlay for Wayland compositors that support the
-wlr-layer-shell protocol (e.g.\& Hyprland, Sway, COSMIC, KDE Plasma).
+wlr-layer-shell protocol (e.g.\& Hyprland, Sway, COSMIC, niri, KDE Plasma).
 .PP
 It runs as a background daemon, drawing a crosshair image on a layer-shell
 surface at the overlay layer, above all other windows including fullscreen
@@ -28,26 +28,34 @@ Configuration is read from
 Path to a PNG crosshair image.  Tilde expansion is supported.
 .TP
 .BI output " = " NAME
-.I (required)
+.I (optional)
 Wayland output name as reported by the compositor (e.g.\&
 .BR DP-1 ,
 .BR eDP-1 ,
 .BR HDMI-A-1 ).
+If omitted, the only connected output is used.  With several displays,
+the name that sorts first alphabetically is used by default.
 See
 .B FINDING THE OUTPUT NAME
 below.
 .TP
 .BI size " = " PIXELS
-.I (required if width/height not set)
-Set both width and height to this value.
+.I (optional)
+Set both width and height to this value, overriding separate dimensions.
+If omitted, each dimension
+defaults to the PNG's actual dimension unless set separately below.
 .TP
 .BI width " = " PIXELS
-.I (required if size not set)
-Width of the crosshair in pixels.
+.I (optional)
+Width of the crosshair in pixels; defaults to the PNG's width if
+.B size
+is unset.
 .TP
 .BI height " = " PIXELS
-.I (required if size not set)
-Height of the crosshair in pixels.
+.I (optional)
+Height of the crosshair in pixels; defaults to the PNG's height if
+.B size
+is unset.
 .TP
 .BI opacity " = " VALUE
 .I (optional; defaults to 1.0)
@@ -58,46 +66,48 @@ remain transparent.
 .PP
 .RS 4
 .nf
-path = "~/.config/wlcrosshair/crosshair.png"
-output = "DP-1"
-size = 24
-opacity = 0.75
+path = "~/.config/wlcrosshair/rotated.png"
 .fi
 .RE
 .SH FINDING THE OUTPUT NAME
-Run the command for your compositor inside its Wayland session and copy the
-name of the display where the crosshair should appear:
+Set
+.B output
+to select a particular display.  Run the command for your compositor in
+a terminal inside your Wayland session.  Look for names such as
+.BR eDP-1 ,
+.BR HDMI-A-1 ,
+or
+.BR DP-2 :
 .TP
-.B KDE Plasma: kscreen-doctor -o
-In "Output: 1 eDP-1 ...", use "eDP-1", not the numeric ID "1".
+.B KDE Plasma
+.B kscreen-doctor -o
 .TP
-.B Hyprland: hyprctl monitors
-In "Monitor eDP-1 (ID 0):", use "eDP-1", not "0" or the description.
+.B Hyprland
+.B hyprctl monitors
 .TP
-.B Sway: swaymsg -t get_outputs
-Use the output's "name" value, not its make or model.
+.B Sway
+.B swaymsg -t get_outputs
 .TP
-.B COSMIC: cosmic-randr list
-Use the name at the start of an entry, e.g.\& "eDP-1 (enabled)".
+.B COSMIC
+.B cosmic-randr list
 .TP
-.B Other wlroots-based compositors (river, Wayfire, labwc): wlr-randr
-Use the name before the quoted description, e.g.\& "DP-1".
-This requires wlr-output-management support.
+.B niri
+.B niri msg outputs
 .TP
-.B niri: niri msg outputs
-Use the connector name in parentheses (e.g.\& "DP-1"), not the quoted
-monitor description.
-.PP
-For other Wayland compositors, consult their output listing command.
-.B wayland-info
-may show an output name if the compositor advertises
-.BR zxdg_output_manager_v1 ;
-do not use a numeric ID, monitor description or model instead.  The
+.B Other wlroots-based compositors
 .B wlr-randr
-command is not generally available on KWin or COSMIC.  A compositor must
-provide a usable output name via
-.B zxdg_output_manager_v1
-and support
+.TP
+.B Other non-wlroots compositors
+.B wayland-info
+.PP
+Use the output name, not a numeric ID or a monitor description.
+.B wlr-randr
+requires wlr-output-management support;
+.B wayland-info
+can show names when the compositor advertises
+.BR zxdg_output_manager_v1 .
+Matching a specified name also requires that protocol.  The compositor
+must support
 .B zwlr_layer_shell_v1
 for this program to work; GNOME does not provide the required layer-shell
 protocol.
@@ -111,7 +121,8 @@ for example:
 output = "eDP-1"
 .fi
 .RE
-Check it again after changing ports or docks.
+Output names can change when switching ports, docks or hardware; check
+again if the overlay cannot find the configured output.
 .SH SOCKET
 .B wlcrosshair
 listens on

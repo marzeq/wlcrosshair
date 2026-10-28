@@ -269,20 +269,22 @@ bool load_config(const char* filename, Config* config, utils_arena* arena) {
     fputs("Failed to load config: 'path' is required\n", stderr);
     return false;
   }
-  if (!parsed.output || !*parsed.output) {
-    fputs("Failed to load config: 'output' is required\n", stderr);
+  if (parsed.output && !*parsed.output) {
+    fputs("Failed to load config: 'output' cannot be empty\n", stderr);
     return false;
   }
   if (!isfinite(parsed.opacity) || parsed.opacity < 0.0 || parsed.opacity > 1.0) {
     fputs("Failed to load config: 'opacity' must be between 0.0 and 1.0\n", stderr);
     return false;
   }
-  if (size > 0)
-    width = height = size;
-  if (width <= 0 || height <= 0 || width > INT_MAX || height > INT_MAX) {
-    fputs("Failed to load config: either 'size' or both 'width' and 'height' are required\n", stderr);
+  if (((seen & 4) && (size <= 0 || size > INT_MAX)) ||
+      ((seen & 8) && (width <= 0 || width > INT_MAX)) ||
+      ((seen & 16) && (height <= 0 || height > INT_MAX))) {
+    fputs("Failed to load config: dimensions must be positive integers\n", stderr);
     return false;
   }
+  if (size > 0)
+    width = height = size;
   parsed.width = (int)width;
   parsed.height = (int)height;
   *config = parsed;
@@ -301,7 +303,15 @@ struct wl_buffer* buffer;
 
 struct wl_output* target_output;
 
-char requested_output[64];
+struct output_ctx {
+  struct wl_output* out;
+  uint32_t registry_name;
+  struct output_ctx* next;
+};
+struct output_ctx* outputs;
+
+const char* requested_output;
+char* selected_output_name;
 int configured;
 
 int surf_w, surf_h;
@@ -325,6 +335,13 @@ int create_shm(size_t size) {
 }
 
 void reset_state(void) {
+  while (outputs) {
+    struct output_ctx* next = outputs->next;
+    free(outputs);
+    outputs = next;
+  }
+  free(selected_output_name);
+  selected_output_name = NULL;
   compositor = NULL;
   shm = NULL;
   layer_shell = NULL;
@@ -426,8 +443,15 @@ bool load_png(const char* path, double opacity) {
 
   png_read_info(png, info);
 
-  png_w = png_get_image_width(png, info);
-  png_h = png_get_image_height(png, info);
+  png_uint_32 image_width = png_get_image_width(png, info);
+  png_uint_32 image_height = png_get_image_height(png, info);
+  if (!image_width || !image_height || image_width > INT_MAX || image_height > INT_MAX) {
+    png_destroy_read_struct(&png, &info, NULL);
+    fclose(fp);
+    return false;
+  }
+  png_w = (int)image_width;
+  png_h = (int)image_height;
 
   png_set_expand(png);
   png_set_strip_16(png);
@@ -452,7 +476,6 @@ bool load_png(const char* path, double opacity) {
   fclose(fp);
 
   premultiply(img_rgba, png_w, png_h, opacity);
-  scale_png();
   return true;
 }
 
@@ -461,10 +484,6 @@ void free_png(void) {
   img_rgba = NULL;
   free_scaled_png();
 }
-
-struct output_ctx {
-  struct wl_output* out;
-};
 
 void xdg_position(void* data, struct zxdg_output_v1* xdg, int32_t x, int32_t y) {
   (void)data;
@@ -494,8 +513,19 @@ void xdg_description(void* data, struct zxdg_output_v1* xdg, const char* descrip
 void xdg_name(void* data, struct zxdg_output_v1* xdg, const char* name) {
   (void)xdg;
   struct output_ctx* ctx = data;
-  if (name && strcmp(name, requested_output) == 0)
+  if (!name || !*name)
+    return;
+  if (requested_output) {
+    if (strcmp(name, requested_output) == 0)
+      target_output = ctx->out;
+  } else if (!selected_output_name || strcmp(name, selected_output_name) < 0) {
+    char* selected = strdup(name);
+    if (!selected)
+      return;
+    free(selected_output_name);
+    selected_output_name = selected;
     target_output = ctx->out;
+  }
 }
 
 const struct zxdg_output_v1_listener xdg_listener = {
@@ -607,22 +637,30 @@ void registry_add(void* data, struct wl_registry* reg,
   else if (strcmp(iface, wl_output_interface.name) == 0) {
     struct wl_output* out =
         wl_registry_bind(reg, name, &wl_output_interface, 2);
-
-    if (xdg_output_manager) {
-      struct output_ctx* ctx = calloc(1, sizeof *ctx);
-      ctx->out = out;
-
-      struct zxdg_output_v1* xdg =
-          zxdg_output_manager_v1_get_xdg_output(xdg_output_manager, out);
-
-      zxdg_output_v1_add_listener(xdg, &xdg_listener, ctx);
-    }
+    struct output_ctx* ctx = calloc(1, sizeof *ctx);
+    if (!ctx)
+      return;
+    ctx->out = out;
+    ctx->registry_name = name;
+    ctx->next = outputs;
+    outputs = ctx;
   }
 }
 
 const struct wl_registry_listener registry_listener = {
     .global = registry_add,
 };
+
+void select_default_output(void) {
+  if (target_output || requested_output)
+    return;
+  struct output_ctx* first = NULL;
+  for (struct output_ctx* ctx = outputs; ctx; ctx = ctx->next)
+    if (!first || ctx->registry_name < first->registry_name)
+      first = ctx;
+  if (first)
+    target_output = first->out;
+}
 
 bool init_surface(int width, int height, const char* output_name) {
   if (display)
@@ -636,16 +674,28 @@ bool init_surface(int width, int height, const char* output_name) {
 
   surf_w = width;
   surf_h = height;
-  strncpy(requested_output, output_name, sizeof(requested_output) - 1);
+  requested_output = output_name;
 
   struct wl_registry* reg = wl_display_get_registry(display);
   wl_registry_add_listener(reg, &registry_listener, NULL);
 
   wl_display_roundtrip(display);
+  if (xdg_output_manager) {
+    for (struct output_ctx* ctx = outputs; ctx; ctx = ctx->next) {
+      struct zxdg_output_v1* xdg =
+          zxdg_output_manager_v1_get_xdg_output(xdg_output_manager, ctx->out);
+      zxdg_output_v1_add_listener(xdg, &xdg_listener, ctx);
+    }
+  }
   wl_display_roundtrip(display);
 
+  select_default_output();
+
   if (!target_output) {
-    fprintf(stderr, "Could not find output '%s'\n", requested_output);
+    if (requested_output)
+      fprintf(stderr, "Could not find output '%s'\n", requested_output);
+    else
+      fputs("Could not find any output\n", stderr);
     return false;
   }
 
@@ -783,11 +833,15 @@ int run_daemon(void) {
   Config config;
   if (!load_config(filename, &config, &config_arena))
     return 1;
-  if (!init_surface(config.width, config.height, config.output)) {
+  if (!load_png(expand_user(config.path, config_alloc), config.opacity)) {
+    fputs("Failed to load PNG image\n", stderr);
+    return 1;
+  }
+  if (!init_surface(config.width ? config.width : png_w,
+                    config.height ? config.height : png_h, config.output)) {
     fputs("failed to initalise surface\n", stderr);
     return 1;
   }
-  load_png(expand_user(config.path, config_alloc), config.opacity);
   bool visible = false;
   int server = listen_socket();
   if (server < 0) {
@@ -851,13 +905,20 @@ int run_daemon(void) {
       }
       free_png();
       destroy_surface();
-      if (!init_surface(next_config.width, next_config.height, next_config.output)) {
+      if (!load_png(expand_user(next_config.path, next_alloc), next_config.opacity)) {
+        fputs("Failed to load PNG image\n", stderr);
+        utils_a_reset(next_alloc);
+        status = 1;
+        break;
+      }
+      if (!init_surface(next_config.width ? next_config.width : png_w,
+                        next_config.height ? next_config.height : png_h,
+                        next_config.output)) {
         fputs("failed to initalise surface\n", stderr);
         utils_a_reset(next_alloc);
         status = 1;
         break;
       }
-      load_png(expand_user(next_config.path, next_alloc), next_config.opacity);
       if (visible)
         draw_png();
       utils_a_reset(config_alloc);
